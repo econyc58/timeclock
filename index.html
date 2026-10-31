@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#cec8b0">
+<meta name="robots" content="noindex,nofollow">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>TIMEclock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+<script>
+/* Adobe Fonts (旧TIMEclockのキット)。失効していてもフォールバックで表示される */
+(function(d){var config={kitId:'tnh8ijf',scriptTimeout:3000,async:true},h=d.documentElement,t=setTimeout(function(){h.className=h.className.replace(/\bwf-loading\b/g,"")+" wf-inactive";},config.scriptTimeout),tk=d.createElement("script"),f=false,s=d.getElementsByTagName("script")[0],a;h.className+=" wf-loading";tk.src='https://use.typekit.net/'+config.kitId+'.js';tk.async=true;tk.onload=tk.onreadystatechange=function(){a=this.readyState;if(f||a&&a!="complete"&&a!="loaded")return;f=true;clearTimeout(t);try{Typekit.load(config)}catch(e){}};s.parentNode.insertBefore(tk,s)})(document);
+</script>
+<style>
+/* =====================================================================
+   寸法ルール: 数値は「1920×1080 デザイン上の px」。--u が画面に合わせた 1px 相当。
+   横長 = 1920×1080 基準 / 縦長 = 1080×1920 基準 に切り替え(下部 @media)
+   ===================================================================== */
+:root{
+  --bg:#cec8b0; --paper:#dad4bb; --line:#b4af9b; --sub:#cdc7ad;
+  --ink:#4e4b42; --ink2:#2b2824; --accent:#ec6f4f;
+  --u:min(100vw / 1920, 100vh / 1080);
+  --side-l:calc(62*var(--u)); --side-r:calc(73*var(--u)); --in:calc(56*var(--u));      /* 左マーク位置 / 右余白 / マーク→本文 */
+  --sx:0px; --sy:0px;                          /* 焼き付き防止シフト */
+}
+@supports (height:100dvh){ :root{ --u:min(100vw / 1920, 100dvh / 1080); } }
+
+*{margin:0;padding:0;border:0;box-sizing:border-box}
+ol,ul{list-style:none}
+html,body{height:100%;overflow:hidden}
+body{
+  background-color:var(--bg);
+  /* 3px グリッドの紙テクスチャ(旧 body::before) */
+  background-image:linear-gradient(90deg,rgba(78,75,66,.04) 1px,transparent 0),linear-gradient(rgba(78,75,66,.04) 1px,transparent 0);
+  background-size:3px 3px;
+  color:var(--ink);
+  font-family:tbudrgothic-std,"Zen Kaku Gothic New","Hiragino Sans","Noto Sans JP","Noto Sans CJK JP",sans-serif;
+  font-weight:400;
+  -webkit-font-smoothing:antialiased;
+  -webkit-tap-highlight-color:transparent;
+  user-select:none; -webkit-user-select:none;
+}
+body.idle{cursor:none}
+
+/* ---------- 背景レイヤー(JSで画面サイズに合わせて描画) ---------- */
+#bg{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+#bg path,#bg circle{fill:none;stroke:var(--line);stroke-width:1.2;vector-effect:non-scaling-stroke}
+.vig{position:fixed;inset:0;pointer-events:none;z-index:5;box-shadow:inset 0 0 60px rgba(0,0,0,.22),inset 0 0 120px rgba(0,0,0,.3)}
+#dim{position:fixed;inset:0;pointer-events:none;z-index:9;background:#000;opacity:0;transition:opacity 3s}
+body.night #dim{opacity:.6}
+
+/* ---------- 全体レイアウト ---------- */
+#app{
+  position:fixed;inset:0;z-index:1;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  display:grid;
+  grid-template-rows:calc(37*var(--u)) calc(47*var(--u)) calc(74*var(--u)) calc(64*var(--u)) calc(54*var(--u)) minmax(0,1fr) calc(62*var(--u)) calc(80*var(--u)) calc(90*var(--u));
+  grid-template-areas:"." "tabs" "rail1" "title" "." "main" "." "foot" "rail2";
+  transform:translate(var(--sx),var(--sy));transition:transform 4s;
+}
+
+/* 左端マーク(太線+細線)。曜日行・パネル行に共通 */
+.mk{position:relative;margin-left:var(--side-l);padding-left:var(--in)}
+.mk::before,.mk::after{content:"";position:absolute;top:0;bottom:0;background:var(--line)}
+.mk::before{left:0;width:calc(14*var(--u))}
+.mk::after{left:calc(22*var(--u));width:calc(3*var(--u))}
+
+/* ---------- 上下レール(線+ダッシュ+3点ドット)を CSS グラデーションで描画 ---------- */
+.rail{position:relative;--ry:calc(24*var(--u))}
+#rail2{--ry:calc(23*var(--u))}
+.rail::before{content:"";position:absolute;left:0;right:0;top:var(--ry);height:calc(2*var(--u));background:var(--ink)}
+.rail::after{
+  content:"";position:absolute;left:calc(var(--side-l) + calc(4*var(--u)));right:calc(var(--side-r) - calc(8*var(--u)));top:calc(var(--ry) + calc(2*var(--u)));height:calc(28*var(--u));
+  --t:calc(77*var(--u)) calc(28*var(--u));  /* 1パターンの幅・高さ */
+  background:
+    linear-gradient(90deg,var(--ink) calc(12*var(--u)),transparent 0) 0 0 / calc(77*var(--u)) calc(5*var(--u)),
+    radial-gradient(circle at calc(36*var(--u)) calc(9.5*var(--u)),var(--ink) calc(3.1*var(--u)),transparent calc(3.7*var(--u))) 0 0 / var(--t),
+    radial-gradient(circle at calc(52*var(--u)) calc(9.5*var(--u)),var(--ink) calc(3.1*var(--u)),transparent calc(3.7*var(--u))) 0 0 / var(--t),
+    radial-gradient(circle at calc(44*var(--u)) calc(22*var(--u)),var(--ink) calc(3.1*var(--u)),transparent calc(3.7*var(--u))) 0 0 / var(--t);
+  background-repeat:space no-repeat;
+}
+#rail1{grid-area:rail1} #rail2{grid-area:rail2}
+
+/* ---------- 曜日タブ ---------- */
+#wd{grid-area:tabs;display:flex;gap:calc(40*var(--u));margin-right:calc(var(--side-r) - calc(10*var(--u)))}
+#wd li{flex:1 1 0;min-width:0;display:flex;align-items:center;padding-left:calc(9*var(--u));background:var(--line);font-size:calc(25*var(--u));letter-spacing:.1em;white-space:nowrap;overflow:hidden}
+#wd .ico{flex:none;width:calc(30*var(--u));height:calc(30*var(--u));margin-right:calc(8*var(--u));background:var(--ink);color:var(--paper);display:grid;place-items:center}
+#wd .ico svg{width:calc(24*var(--u));height:calc(24*var(--u))}
+#wd li.on{background:var(--ink);color:var(--paper)}
+#wd li.on .ico{background:var(--paper);color:var(--ink)}
+
+/* ---------- 見出し ---------- */
+h1{grid-area:title;margin-left:calc(65*var(--u));font-size:calc(56*var(--u));line-height:calc(64*var(--u));letter-spacing:.2em;text-shadow:.12em .12em 0 var(--line);font-weight:400}
+
+/* ---------- パネル ---------- */
+#panels{
+  grid-area:main;margin-right:var(--side-r);
+  display:grid;column-gap:calc(48*var(--u));row-gap:calc(30*var(--u));
+  grid-template-columns:362fr 362fr 909fr;
+  grid-template-rows:minmax(0,1fr) minmax(0,1fr);
+  grid-template-areas:"weather trash date" "weather trash sched";
+}
+.panel{background:var(--paper);display:flex;flex-direction:column;min-height:0;min-width:0}
+#weather{grid-area:weather} #trash{grid-area:trash} #date{grid-area:date} #sched{grid-area:sched}
+h2{flex:none;background:var(--ink);color:var(--paper);font-size:calc(25*var(--u));letter-spacing:.2em;height:calc(47*var(--u));line-height:calc(47*var(--u));padding-left:calc(15*var(--u));font-weight:400;white-space:nowrap}
+h2::before{content:"";display:inline-block;width:calc(20*var(--u));height:calc(20*var(--u));margin-right:calc(12*var(--u));vertical-align:calc(-2*var(--u));background:var(--paper)}
+h3{flex:none;margin:calc(27*var(--u)) 0 0 calc(35*var(--u));font-size:calc(28*var(--u));letter-spacing:.08em;font-weight:400;white-space:nowrap}
+.ibox{flex:1 1 0;min-height:calc(120*var(--u));margin:calc(10*var(--u)) calc(31*var(--u)) 0;border-bottom:calc(3*var(--u)) solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.ibox svg{display:block;max-width:100%;max-height:92%}
+#wicon svg{width:calc(220*var(--u));height:calc(220*var(--u))}
+#gicon svg{width:calc(300*var(--u));height:calc(174*var(--u))}
+#temp{flex:none;padding:calc(6*var(--u)) calc(30*var(--u)) calc(26*var(--u)) calc(35*var(--u));font-size:calc(27*var(--u));letter-spacing:.1em}
+#temp li{margin-top:calc(20*var(--u));white-space:nowrap}
+#trashday{flex:none;min-height:calc(150*var(--u));padding:calc(30*var(--u)) calc(20*var(--u)) calc(20*var(--u)) calc(35*var(--u));font-size:calc(34*var(--u));line-height:1.45;letter-spacing:.05em}
+
+/* --k: 文字幅がフォントで変わっても枠に収まるよう JS(fitDate)が自動で縮小率を入れる */
+#dateInner{--k:1;flex:1;min-width:0;display:flex;align-items:center;justify-content:space-around;gap:calc(24*var(--u));padding:0 calc(28*var(--u));overflow:hidden}
+#clock_time{font-size:calc(calc(132*var(--u)) * var(--k));letter-spacing:.01em;font-variant-numeric:tabular-nums;white-space:nowrap}
+#clock_date{white-space:nowrap;font-size:calc(calc(48*var(--u)) * var(--k));letter-spacing:.03em;line-height:1.35;text-align:center;font-variant-numeric:tabular-nums}
+#clock_date small{display:block;font-size:calc(calc(34*var(--u)) * var(--k));letter-spacing:.2em}
+
+#evs{flex:1;padding:calc(10*var(--u)) calc(22*var(--u)) 0;overflow:hidden}
+.ev{display:flex;align-items:center;height:calc(48*var(--u));margin-bottom:calc(6*var(--u));padding:0 calc(18*var(--u));background:var(--sub);border-left:calc(8*var(--u)) solid var(--line)}
+.ev.sel{background:var(--ink);color:var(--paper);border-left-color:var(--ink);box-shadow:calc(4*var(--u)) calc(4*var(--u)) var(--line)}
+.ev .t{width:calc(210*var(--u));font-size:calc(25*var(--u));letter-spacing:.06em;flex:none}
+.ev .n{font-size:calc(28*var(--u));flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.04em}
+.evnote{font-size:calc(26*var(--u));padding:calc(60*var(--u)) calc(20*var(--u));text-align:center;letter-spacing:.08em}
+
+/* ---------- フッター ---------- */
+footer{grid-area:foot;position:relative;margin:0 calc(var(--side-r) + calc(5*var(--u))) 0 var(--side-l);background:var(--paper);box-shadow:calc(4*var(--u)) calc(4*var(--u)) var(--line);display:flex;align-items:center;padding-left:calc(69*var(--u));min-width:0}
+footer::before,footer::after{content:"";position:absolute;top:0;bottom:0;background:var(--ink)}
+footer::before{left:0;width:calc(14*var(--u))}
+footer::after{left:calc(22*var(--u));width:calc(3*var(--u))}
+#bdr01{font-size:calc(28*var(--u));letter-spacing:calc(4*var(--u));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+#hint{position:fixed;left:50%;bottom:calc(10px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:6;font-size:max(11px,calc(15*var(--u)));color:var(--ink);background:var(--paper);padding:.3em 1em;border-left:.35em solid var(--ink);white-space:nowrap;transition:opacity .6s}
+#hint.hide{opacity:0;pointer-events:none}
+
+/* =====================================================================
+   縦長(スマホ縦・縦置きタブレット): 900×1600 基準で再配置
+   ※スマホで文字が小さくなり過ぎないよう、横長より小さいキャンバスを基準にしている
+   ===================================================================== */
+@media (max-aspect-ratio: 1/1){
+  :root{--u:min(100vw / 900, 100vh / 1600); --side-l:calc(28*var(--u)); --side-r:calc(28*var(--u)); --in:calc(36*var(--u))}
+  @supports (height:100dvh){ :root{ --u:min(100vw / 900, 100dvh / 1600); } }
+  #app{grid-template-rows:calc(32*var(--u)) calc(50*var(--u)) calc(66*var(--u)) calc(60*var(--u)) calc(22*var(--u)) minmax(0,1fr) calc(36*var(--u)) calc(72*var(--u)) calc(72*var(--u))}
+  #rail1{--ry:calc(20*var(--u))} #rail2{--ry:calc(18*var(--u))}
+  #wd{gap:calc(6*var(--u));margin-right:var(--side-r)}
+  #wd li{padding-left:calc(6*var(--u));font-size:calc(22*var(--u));letter-spacing:.03em}
+  #wd .ico{width:calc(28*var(--u));height:calc(28*var(--u));margin-right:calc(5*var(--u))}
+  #wd .ico svg{width:calc(22*var(--u));height:calc(22*var(--u))}
+  h1{margin-left:calc(31*var(--u));font-size:calc(50*var(--u));line-height:calc(60*var(--u))}
+  #panels{
+    column-gap:calc(24*var(--u));row-gap:calc(24*var(--u));
+    grid-template-columns:1fr 1fr;
+    grid-template-rows:auto minmax(0,1fr) minmax(calc(200*var(--u)),calc(280*var(--u)));
+    grid-template-areas:"date date" "weather trash" "sched sched";
+  }
+  h3{margin:calc(22*var(--u)) 0 0 calc(28*var(--u))}
+  .ibox{margin:calc(8*var(--u)) calc(24*var(--u)) 0}
+  #temp{padding:calc(4*var(--u)) calc(20*var(--u)) calc(22*var(--u)) calc(28*var(--u))}
+  #trashday{padding:calc(26*var(--u)) calc(16*var(--u)) calc(18*var(--u)) calc(28*var(--u))}
+  #dateInner{flex-direction:column;justify-content:center;gap:calc(8*var(--u));padding:calc(28*var(--u)) calc(16*var(--u)) calc(32*var(--u))}
+  #clock_time{font-size:calc(calc(156*var(--u)) * var(--k));line-height:1}
+  #clock_date{font-size:calc(calc(46*var(--u)) * var(--k))}
+  #clock_date small{display:inline;margin-left:.6em}
+  #gicon svg{width:calc(280*var(--u));height:calc(162*var(--u))}
+  #trashday{font-size:calc(32*var(--u))}
+  .ev .t{width:calc(170*var(--u))}
+  footer{margin-right:calc(var(--side-r) + calc(4*var(--u)));padding-left:calc(56*var(--u))}
+  #bdr01{font-size:calc(26*var(--u));letter-spacing:calc(3*var(--u))}
+}
+
+@media (prefers-reduced-motion: reduce){
+  #app,#dim,#hint{transition:none}
+}
+</style>
+</head>
+<body>
+<svg id="bg" aria-hidden="true"></svg>
+<div class="vig"></div>
+<div id="dim"></div>
+
+<div id="app">
+  <ol id="wd" class="mk"></ol>
+  <div class="rail" id="rail1"></div>
+  <h1 id="today"></h1>
+  <div id="panels" class="mk">
+    <section class="panel" id="weather"><h2>WEATHER</h2><h3 id="tenki"></h3><div class="ibox" id="wicon"></div><ul id="temp"></ul></section>
+    <section class="panel" id="trash"><h2>TRASH DAY</h2><h3 id="gomi"></h3><div class="ibox" id="gicon"></div><p id="trashday"></p></section>
+    <section class="panel" id="date"><h2>DATE</h2><div id="dateInner"><span id="clock_time"></span><span id="clock_date"></span></div></section>
+    <section class="panel" id="sched"><h2>SCHEDULE</h2><div id="evs"></div></section>
+  </div>
+  <footer><p id="bdr01"></p></footer>
+  <div class="rail" id="rail2"></div>
+</div>
+<div id="hint">タップで全画面・スリープ無効化</div>
+
+<!-- ===== アイコン定義(すべてSVGコード。色は currentColor / CSS変数で切替) ===== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- 曜日: 惑星記号 ☉☽♂☿♃♀♄ -->
+    <symbol id="p0" viewBox="0 0 28 28"><g fill="none" stroke="currentColor" stroke-width="2.3"><circle cx="14" cy="14" r="9"/></g><circle cx="14" cy="14" r="2.4" fill="currentColor"/></symbol>
+    <symbol id="p1" viewBox="0 0 28 28"><path d="M9 4.5A9.5 9.5 0 0 1 9 23.5A13 13 0 0 0 9 4.5Z" fill="currentColor"/></symbol>
+    <symbol id="p2" viewBox="0 0 28 28"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11.5" cy="16.5" r="6.5"/><path d="M16.2 11.8L22.5 5.5M16.5 5.5h6v6"/></g></symbol>
+    <symbol id="p3" viewBox="0 0 28 28"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5a4.5 4 0 0 0 9 0"/><circle cx="14" cy="12" r="4.6"/><path d="M14 16.6V25M10.2 21.3h7.6"/></g></symbol>
+    <symbol id="p4" viewBox="0 0 28 28"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9C6.5 5 13 4.5 13 8.6C13 12 8.5 15.5 6.5 19H23M18.5 5.5V24.5"/></g></symbol>
+    <symbol id="p5" viewBox="0 0 28 28"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="14" cy="10" r="6"/><path d="M14 16V25M9.8 21h8.4"/></g></symbol>
+    <symbol id="p6" viewBox="0 0 28 28"><g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 7.5h8M10.5 3.5V22M10.5 13.5C12 10.5 19 10 19 14.8C19 18 16 19.5 16.4 22.3C16.7 24.3 19 24.8 20.5 23.6"/></g></symbol>
+
+    <!-- ゴミ: 140×140 の線画。表示時に枠(300×174)の中へ並べて配置する -->
+    <symbol id="t-kanen" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M55 44C32 56 18 80 18 102C18 120 32 128 70 128S122 120 122 102C122 80 108 56 85 44"/>
+      <path d="M55 44Q70 52 85 44"/>
+      <path d="M70 42C64 24 46 16 42 26C38 36 56 44 70 42C84 44 102 36 98 26C94 16 76 24 70 42Z"/>
+      <path d="M62 56L58 68M78 56L82 68"/>
+      <path d="M96 76C104 86 107 96 106 106" stroke-width="5"/>
+    </g></symbol>
+    <symbol id="t-nama" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <g transform="translate(0 -6)">
+      <path d="M12 46C20 28 34 20 46 20V72C34 72 20 64 12 46Z"/>
+      <circle cx="28" cy="42" r="3.5" fill="currentColor" stroke="none"/>
+      <path d="M46 46H108M62 46L56 30M62 46L56 62M78 46L72 30M78 46L72 62M94 46L88 32M94 46L88 60"/>
+      <path d="M108 46L128 30V62Z"/>
+      </g>
+      <g transform="translate(4 2)">
+      <path d="M28 86C40 82 50 82 56 88C60 94 52 100 52 108C52 116 60 120 56 126C48 132 36 132 28 128C24 120 32 116 32 108C32 100 24 94 28 86Z"/>
+      <path d="M42 84V76M42 78C46 72 52 72 56 74"/>
+      </g>
+      <path d="M78 98L86 106L94 96L102 106L110 96L118 104L124 98C124 116 114 128 101 128S78 116 78 98Z"/>
+    </g></symbol>
+    <symbol id="t-plastic" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M38 18H54V30H38Z"/>
+      <path d="M34 30H58C66 34 70 40 70 50V118A10 10 0 0 1 60 128H32A10 10 0 0 1 22 118V50C22 40 26 34 34 30Z"/>
+      <path d="M34 62H58V100H34Z" stroke-width="5"/>
+      <path d="M84 70H130L122 128H92Z"/>
+      <path d="M80 70H134"/>
+      <path d="M86 70C86 56 96 50 107 50S128 56 128 70"/>
+      <path d="M110 50L116 18H126"/>
+      <path d="M90 92H124" stroke-width="5"/>
+    </g></symbol>
+    <symbol id="t-can" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M38 12H56V26C56 34 68 40 68 54V118A10 10 0 0 1 58 128H36A10 10 0 0 1 26 118V54C26 40 38 34 38 26Z"/>
+      <path d="M38 22H56"/>
+      <path d="M26 72H68V104H26" stroke-width="5"/>
+      <path d="M84 46H124A6 6 0 0 1 130 52V122A6 6 0 0 1 124 128H84A6 6 0 0 1 78 122V52A6 6 0 0 1 84 46Z"/>
+      <path d="M78 58H130M78 116H130"/>
+      <path d="M96 52V40H112" stroke-width="5"/>
+      <path d="M104 72V100" stroke-width="5"/>
+    </g></symbol>
+    <symbol id="t-koshi" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 50L70 28L126 50L70 72Z"/>
+      <path d="M14 50V96L70 118L126 96V50M70 72V118"/>
+      <path d="M14 65L70 87M14 80L70 102M70 87L126 65M70 102L126 80" stroke-width="3.5"/>
+      <path d="M42 39L98 61V107M98 39L42 61V107"/>
+      <path d="M52 35L62 39M48 45L58 49M86 39L76 43M90 49L80 53" stroke-width="4"/>
+    </g></symbol>
+    <symbol id="t-hunen" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M106 12A23 23 0 0 0 93 54V70H119V54A23 23 0 0 0 106 12Z"/>
+      <path d="M95 82H117M98 94H114"/>
+      <path d="M98 38L106 48L114 38" stroke-width="5"/>
+      <path d="M10 74H30L36 86L44 76L50 84L54 74H66V108A20 20 0 0 1 46 128H30A20 20 0 0 1 10 108Z"/>
+      <path d="M66 84H70A11 11 0 0 1 70 106H66"/>
+      <path d="M34 52L46 48L44 60Z" stroke-width="5"/>
+    </g></symbol>
+    <symbol id="t-none" viewBox="0 0 140 140"><g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round">
+      <circle cx="70" cy="70" r="46"/><path d="M38 102L102 38"/>
+    </g></symbol>
+  </defs>
+</svg>
+
+<script>
+/* ===== 設定(ここだけ編集) ===== */
+const CONFIG = {
+  place: "長岡", lat: 37.446, lon: 138.851,
+  calUrl: "https://script.google.com/macros/s/AKfycbye0UiFJ74c9tD5LN8S3xn7XEGIiB_hD7ApnNXP0YiXMCrE8jFU7QJDpnJt03R7L0Q/exec",          // 空のままでOK。公開サイトに置く場合は端末側に保存する(末尾コメント参照)
+  maxEvents: 4,
+  switchHour: 18,      // この時刻以降は「明日」の情報を表示
+  night: [23, 6],      // 減光する時間帯 [開始, 終了)
+  // ゴミ出し: days = 曜日(0=日…6=土) / nth = 第何週か(省略可) / icon = kanen・can・koshi・hunen
+  // ※居住地の収集日に合わせて書き換える
+  garbage: [
+    { name: "生ゴミ", icon: "t-nama", days: [1, 5] }, 
+    { name: "プラゴミ", icon: "plastic", days: [2] },     
+    { name: "可燃ゴミ", icon: "kanen", days: [3] },
+    { name: "ビン・缶", icon: "can",   days: [4] },
+    { name: "古紙",     icon: "koshi", days: [4], nth: [1, 3]},
+    { name: "不燃ゴミ", icon: "hunen", days: [4], nth: [2, 4] }
+  ]
+};
+/* ============================== */
+/* カレンダーURLは端末のlocalStorageに保存(公開サイトのHTMLに書かない)。初回だけ …/index.html#cal=<URL> で開く */
+try{
+  const m = location.hash.match(/^#cal=(.+)$/);
+  if(m){ localStorage.setItem("calUrl", decodeURIComponent(m[1])); history.replaceState(null, "", location.pathname + location.search); }
+  const v = localStorage.getItem("calUrl");
+  if(v && !CONFIG.calUrl) CONFIG.calUrl = v;
+}catch(e){}
+const $ = id => document.getElementById(id);
+const WD = ["日","月","火","水","木","金","土"];
+const WD_EN = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
+const p2 = n => String(n).padStart(2, "0");
+const ymd = d => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const SVGNS = "http://www.w3.org/2000/svg";
+
+/* 変化した時だけDOMを書き換える(毎秒・30秒ごとの無駄な再描画/画像デコードを防ぐ) */
+const cache = new Map();
+function put(id, html){ if(cache.get(id) === html) return; cache.set(id, html); $(id).innerHTML = html; }
+function txt(id, s){ if(cache.get(id) === s) return; cache.set(id, s); $(id).textContent = s; }
+
+/* ---------- 背景: 画面サイズに合わせて斜線・二重円弧をSVGで生成 ---------- */
+function drawBg(){
+  const w = innerWidth, h = innerHeight, s = Math.min(w, h) / 1080, svg = $("bg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const d = [];
+  // 45°の斜線 y = x + c を、x の範囲 [x0, x1] かつ画面内にクリップして描く
+  const line = (c, x0 = -Infinity, x1 = Infinity) => {
+    const a = Math.max(x0, 0, -c), b = Math.min(x1, w, h - c);
+    if(a < b) d.push(`M${a.toFixed(1)} ${(a + c).toFixed(1)}L${b.toFixed(1)} ${(b + c).toFixed(1)}`);
+  };
+  // 帯A: 左上の角を通る3本
+  line(78*s, -Infinity, 935*s); line(-2*s, -Infinity, 1066*s); line(-82*s, -Infinity, 924*s);
+  // 帯B: 右下の角を通る3本(c の基準 = h - w)
+  const b = h - w;
+  line(b + 98*s, w - 1032*s); line(b + 5*s, w - 1072*s); line(b - 78*s, w - 862*s);
+  const arcs = [[0, 0, 577*s], [0, 0, 589*s], [w, h, 597*s], [w, h, 610*s]]
+    .map(([cx, cy, r]) => `<circle cx="${cx}" cy="${cy}" r="${r.toFixed(1)}"/>`).join("");
+  svg.innerHTML = `<path d="${d.join("")}"/>${arcs}`;
+}
+
+/* ---------- 曜日タブ生成 ---------- */
+$("wd").innerHTML = WD_EN.map((t, i) => `<li><span class="ico"><svg viewBox="0 0 28 28"><use href="#p${i}"/></svg></span>${t}</li>`).join("");
+
+/* ---------- 天気 ---------- */
+let wx = null, wxErr = false;
+const INK = 'stroke="#4e4b42" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"';
+const CLOUD = `<path d="M22 70h52a15 15 0 0 0 2-29.9A23 23 0 0 0 31 46a12 12 0 0 0-9 24z" ${INK} fill="#dad4bb"/>`;
+const SUN = '<circle cx="50" cy="50" r="27" fill="#ec6f4f"/>';
+function wxSvg(c){
+  let g;
+  if(c <= 1) g = SUN;
+  else if(c === 2) g = `<circle cx="36" cy="36" r="20" fill="#ec6f4f"/><g transform="translate(6,8)">${CLOUD}</g>`;
+  else if(c === 3) g = CLOUD;
+  else if(c === 45 || c === 48) g = `<path d="M14 32h72M22 50h64M14 68h72" ${INK}/>`;
+  else if((c >= 71 && c <= 77) || c === 85 || c === 86) g = `<g transform="translate(0,-12)">${CLOUD}</g><g fill="#4e4b42"><circle cx="32" cy="80" r="3.5"/><circle cx="50" cy="88" r="3.5"/><circle cx="68" cy="80" r="3.5"/></g>`;
+  else if(c >= 95) g = `<g transform="translate(0,-12)">${CLOUD}</g><path d="M54 60L42 78h14l-10 16" ${INK}/>`;
+  else g = `<g transform="translate(0,-12)">${CLOUD}</g><path d="M34 66l-6 14M50 66l-6 14M66 66l-6 14" ${INK}/>`;
+  return `<svg viewBox="0 0 100 100" aria-hidden="true">${g}</svg>`;
+}
+function wmo(c){
+  if(c <= 1) return "晴れ"; if(c === 2) return "晴れ時々曇り"; if(c === 3) return "曇り";
+  if(c === 45 || c === 48) return "霧"; if(c >= 51 && c <= 57) return "霧雨"; if(c >= 61 && c <= 67) return "雨";
+  if(c >= 71 && c <= 77) return "雪"; if(c >= 80 && c <= 82) return "にわか雨"; if(c === 85 || c === 86) return "にわか雪";
+  if(c >= 95) return "雷雨"; return "—";
+}
+
+/* 18時以降は翌日の情報を表示(旧TIMEclockの仕様) */
+function target(){
+  const n = new Date(), tm = n.getHours() >= CONFIG.switchHour, d = new Date(n);
+  if(tm) d.setDate(d.getDate() + 1);
+  return { tm, d };
+}
+
+function renderWeather(){
+  const { tm, d } = target();
+  txt("tenki", `${tm ? "明日" : "今日"}の${CONFIG.place}の天気`);
+  // 取得時刻ではなく「日付」で該当日を引く(深夜0時をまたいでもズレない)
+  const i = wx ? wx.daily.time.indexOf(ymd(d)) : -1;
+  if(i < 0){
+    put("wicon", "");
+    put("temp", `<li>${wxErr ? "天気を取得できません" : "取得中…"}</li>`);
+    return;
+  }
+  const x = wx.daily, pr = x.precipitation_probability_max[i];
+  put("wicon", wxSvg(x.weather_code[i]));
+  put("temp", `<li>天気：${wmo(x.weather_code[i])}</li><li>気温：${Math.round(x.temperature_2m_max[i])} / ${Math.round(x.temperature_2m_min[i])}℃</li><li>降水：${pr ?? "–"}%</li>`);
+}
+
+/* ---------- ゴミ ---------- */
+// 該当するゴミのアイコンを枠内に横並びで描く(複数該当の日は2つ並ぶ)
+function trashSvg(ids){
+  const n = ids.length, gap = 24, sz = Math.min(140, (300 - gap * (n + 1)) / n);
+  const x0 = (300 - (n * sz + (n - 1) * gap)) / 2, y = (174 - sz) / 2;
+  const uses = ids.map((id, k) => `<use href="#t-${id}" x="${(x0 + k * (sz + gap)).toFixed(1)}" y="${y.toFixed(1)}" width="${sz.toFixed(1)}" height="${sz.toFixed(1)}"/>`).join("");
+  return `<svg viewBox="0 0 300 174" aria-hidden="true" color="#2b2824"><rect width="300" height="174" fill="#b4af9b"/>${uses}</svg>`;
+}
+function renderTrash(){
+  const { tm, d } = target();
+  txt("gomi", `${tm ? "明日" : "今日"}の収集ゴミ`);
+  const w = d.getDay(), nth = Math.ceil(d.getDate() / 7);
+  const hit = CONFIG.garbage.filter(g => g.days.includes(w) && (!g.nth || g.nth.includes(nth)));
+  const icons = [...new Set(hit.map(g => g.icon))].slice(0, 2);   // 同じアイコンは1つに、最大2つまで
+  put("gicon", trashSvg(icons.length ? icons : ["none"]));
+  put("trashday", hit.length ? hit.map(g => esc(g.name)).join("<br>") : "収集ナシ");
+}
+
+
+/* ---------- 予定 ---------- */
+let events = null, calErr = false;
+function evLabel(e){
+  if(e.allDay) return "終日";
+  const t0 = new Date(); t0.setHours(0,0,0,0);
+  const x = new Date(e.s); x.setHours(0,0,0,0);
+  const diff = Math.round((x - t0) / 864e5), hm = `${p2(e.s.getHours())}:${p2(e.s.getMinutes())}`;
+  return diff <= 0 ? hm : diff === 1 ? `明日 ${hm}` : `${p2(e.s.getMonth()+1)}/${p2(e.s.getDate())} ${hm}`;
+}
+function renderCal(){
+  if(!CONFIG.calUrl) return put("evs", '<div class="evnote">カレンダー未接続(calUrl を設定)</div>');
+  if(!events) return put("evs", `<div class="evnote">${calErr ? "カレンダーを取得できません" : "取得中…"}</div>`);
+  const now = new Date();
+  const list = events.map(e => ({ ...e, s: new Date(e.start), e: new Date(e.end) }))
+    .filter(e => e.e > now).sort((a, b) => a.s - b.s).slice(0, CONFIG.maxEvents);
+  put("evs", list.length
+    ? list.map((e, i) => `<div class="ev${i === 0 ? " sel" : ""}"><span class="t">${evLabel(e)}</span><span class="n">${esc(e.title || "(無題)")}</span></div>`).join("")
+    : '<div class="evnote">直近の予定はありません</div>');
+}
+
+/* ---------- エンドメッセージ(1日ごとに切り替え) ---------- */
+const ENDS = ["flowers for m[A]chines","or not to [B]e","meaningless [C]ode","childhoo[D]'s end","the [E]nd of YoRHa","mission [F]ailed","hun[G]ry for knowledge","a mountain too [H]igh","no [I] in team","bad [J]udgment","aji wo [K]utta","[L]one wolf","break ti[M]e","[N]o man's village","just y[O]u and me","corru[P]tion","[Q]uestionable actions","mave[R]ick","city e[S]cape","fa[T]al error","deb[U]nked","reckless bra[V]ery","broken [W]ings","time to rela[X]","head[Y] battle","over[Z]ealous"];
+function endMsg(){
+  const n = new Date(), k = Math.floor(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 864e5);
+  txt("bdr01", ENDS[((k * 2654435761) >>> 0) % ENDS.length]);   // 日付から決まる擬似乱数
+}
+
+/* ---------- 日付パネルの文字を枠内に収める(フォント差・画面比率差を吸収) ---------- */
+function fitDate(){
+  const box = $("dateInner");
+  box.style.setProperty("--k", 1);
+  const cs = getComputedStyle(box), padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const avail = box.clientWidth - padX;
+  const kids = [$("clock_time"), $("clock_date")];
+  const need = cs.flexDirection === "column"
+    ? Math.max(...kids.map(e => e.scrollWidth))
+    : kids.reduce((a, e) => a + e.scrollWidth, 0) + parseFloat(cs.columnGap || 0);
+  if(need > avail) box.style.setProperty("--k", (avail / need * 0.97).toFixed(3));
+}
+
+/* ---------- 時計(秒の切り替わりに同期) ---------- */
+let lastMin = -1;
+function clock(){
+  const n = new Date(), h = n.getHours(), m = n.getMinutes();
+  txt("clock_time", `${p2(h)}:${p2(m)}:${p2(n.getSeconds())}`);
+  if(m === lastMin) return;          // 以下は1分に1回で十分
+  lastMin = m;
+  put("clock_date", `${n.getFullYear()}/${p2(n.getMonth()+1)}/${p2(n.getDate())}<small>${WD[n.getDay()]}曜日</small>`);
+  txt("today", h >= CONFIG.switchHour ? "TOMORROW" : "TODAY");
+  document.querySelectorAll("#wd li").forEach((li, i) => li.classList.toggle("on", i === n.getDay()));
+  const [ns, ne] = CONFIG.night;
+  document.body.classList.toggle("night", ns > ne ? (h >= ns || h < ne) : (h >= ns && h < ne));
+  renderWeather(); renderTrash(); renderCal(); endMsg(); fitDate();
+}
+function tick(){ clock(); setTimeout(tick, 1000 - (Date.now() % 1000) + 5); }
+
+/* ---------- 通信(タイムアウト・HTTPエラー検知・失敗時は短間隔で再試行) ---------- */
+async function getJSON(url, ms = 10000){
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+  try{
+    const r = await fetch(url, { signal: ac.signal, cache: "no-store" });
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  }finally{ clearTimeout(t); }
+}
+const OK_MS = 15 * 60e3, RETRY_MS = 2 * 60e3;
+let wxTimer, calTimer;
+async function loadWeather(){
+  clearTimeout(wxTimer);
+  let ok = false;
+  try{
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${CONFIG.lat}&longitude=${CONFIG.lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FTokyo&forecast_days=3`;
+    const j = await getJSON(u);
+    if(!j.daily || !Array.isArray(j.daily.time)) throw new Error("bad data");
+    wx = j; wxErr = false; ok = true;
+  }catch(e){ wxErr = true; console.warn("weather:", e); }
+  renderWeather();
+  wxTimer = setTimeout(loadWeather, ok ? OK_MS : RETRY_MS);
+}
+async function loadCal(){
+  clearTimeout(calTimer);
+  if(!CONFIG.calUrl) return renderCal();
+  let ok = false;
+  try{
+    const j = await getJSON(CONFIG.calUrl, 20000);
+    if(!Array.isArray(j)) throw new Error("bad data");
+    events = j; calErr = false; ok = true;
+  }catch(e){ calErr = true; console.warn("calendar:", e); }
+  renderCal();
+  calTimer = setTimeout(loadCal, ok ? OK_MS : RETRY_MS);
+}
+addEventListener("online", () => { loadWeather(); loadCal(); });
+
+/* ---------- 焼き付き防止: 5分ごとに全体を数px移動 ---------- */
+setInterval(() => {
+  const r = () => `${Math.round((Math.random() - .5) * 10)}px`;
+  document.documentElement.style.setProperty("--sx", r());
+  document.documentElement.style.setProperty("--sy", r());
+}, 300000);
+
+/* ---------- キオスク機能 ---------- */
+// 画面スリープ防止(WakeLockは https / localhost 配信時のみ有効)
+let lock = null;
+async function keepAwake(){
+  try{ if("wakeLock" in navigator && !lock){ lock = await navigator.wakeLock.request("screen"); lock.addEventListener("release", () => lock = null); } }catch(e){}
+}
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "visible"){ keepAwake(); lastMin = -1; clock(); loadWeather(); loadCal(); }
+});
+// ヒント: 全画面中/初回タップ後/15秒経過で隠す(iPhoneは全画面APIが無いので時間で消す)
+const hint = $("hint"), hideHint = () => hint.classList.add("hide");
+setTimeout(hideHint, 15000);
+document.addEventListener("fullscreenchange", () => hint.classList.toggle("hide", !!document.fullscreenElement));
+document.addEventListener("click", () => {
+  const d = document.documentElement;
+  if(!document.fullscreenElement && d.requestFullscreen) d.requestFullscreen().catch(() => {});
+  keepAwake(); hideHint();
+});
+// マウスカーソルは3秒操作が無ければ隠す(タッチ端末には影響なし)
+let idleT;
+addEventListener("pointermove", () => {
+  document.body.classList.remove("idle");
+  clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add("idle"), 3000);
+});
+
+/* ---------- 起動 ---------- */
+let rz;
+addEventListener("resize", () => { cancelAnimationFrame(rz); rz = requestAnimationFrame(() => { drawBg(); fitDate(); }); });
+drawBg(); tick(); loadWeather(); loadCal();
+// Webフォント(TB UDゴシック等)の読込完了後に幅を測り直す
+if(document.fonts){ document.fonts.ready.then(fitDate); document.fonts.addEventListener?.("loadingdone", fitDate); }
+setTimeout(fitDate, 3500);
+</script>
+<!--
+==== Googleカレンダー接続手順(非公開カレンダーのまま使える) ====
+1. https://script.google.com で新規プロジェクトを作成し、以下を貼り付ける:
+
+function doGet() {
+  const now = new Date();
+  const end = new Date(now.getTime() + 7 * 86400000);
+  const ev = CalendarApp.getDefaultCalendar().getEvents(now, end).slice(0, 30).map(e => ({
+    title: e.getTitle(),
+    start: e.getStartTime().toISOString(),
+    end: e.getEndTime().toISOString(),
+    allDay: e.isAllDayEvent()
+  }));
+  return ContentService.createTextOutput(JSON.stringify(ev))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+2. 「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」
+   実行ユーザー: 自分 / アクセスできるユーザー: 全員
+3. 発行されたURL(/exec で終わる)を CONFIG.calUrl に貼る
+   ※URLを知っている人は予定が見えるため、他人に共有しない
+4. 公開サイトに置く場合は、calUrl をHTMLに書かず、タブレットで初回だけ次のURLを開く:
+   https://(サイトのURL)/index.html#cal=(手順3のURL)
+   → 端末のlocalStorageに保存され、アドレス欄からは消える。以後は通常のURLで開くだけ
+-->
+</body>
+</html>
